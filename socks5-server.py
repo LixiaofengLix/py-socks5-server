@@ -59,7 +59,6 @@ def handle_udp_proxy(sock, dst_addr, dst_port):
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_sock.bind((LOCAL_IP, 0))
         _, local_port = udp_sock.getsockname()
-        ip_address = socket.gethostbyname(socket.gethostname())
         print(f'[Server UDP Step2] connect {LOCAL_IP}:{local_port}')
 
         # UDP Step3: 告诉客户端 UDP 端口已建立
@@ -73,17 +72,22 @@ def handle_udp_proxy(sock, dst_addr, dst_port):
 
         # UDP Step4 / UDP Step5: 转发 UDP 请求
         while True:
+            # +----+------+------+----------+----------+----------+
+            # |RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
+            # +----+------+------+----------+----------+----------+
+            # | 2  |  1   |  1   | Variable |    2     | Variable |
+            # +----+------+------+----------+----------+----------+
             data, addr = udp_sock.recvfrom(4096)
+            # 默认不分包
             if data[0] != 0 or data[1] != 0 or data[2] != 0:
                 continue  # Invalid UDP request
 
-            # Extract the target address and port
             addr_type = data[3]
-            if addr_type == 1:  # IPv4
+            if addr_type == ADDR_TYPE_IPV4:  # IPv4
                 target_addr = socket.inet_ntoa(data[4:8])
                 target_port = struct.unpack('>H', data[8:10])[0]
                 payload = data[10:]
-            elif addr_type == 3:  # Domain name
+            elif addr_type == ADDR_TYPE_DOMAIN:  # Domain name
                 domain_len = data[4]
                 target_addr = data[5:5 + domain_len]
                 target_port = struct.unpack('>H', data[5 + domain_len:7 + domain_len])[0]
@@ -91,13 +95,15 @@ def handle_udp_proxy(sock, dst_addr, dst_port):
             else:
                 continue  # Unsupported address type
 
-            # Send the payload to the target
             udp_sock.sendto(payload, (target_addr, target_port))
 
-            # Receive the response from the target
             response, _ = udp_sock.recvfrom(4096)
 
-            # Send the response back to the client
+            # +----+------+------+----------+----------+----------+
+            # |RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
+            # +----+------+------+----------+----------+----------+
+            # | 2  |  1   |  1   | Variable |    2     | Variable |
+            # +----+------+------+----------+----------+----------+
             udp_sock.sendto(b'\x00\x00\x00\x01' + socket.inet_aton(target_addr) + struct.pack('>H', target_port) + response, addr)
     finally:
         udp_sock.close()
